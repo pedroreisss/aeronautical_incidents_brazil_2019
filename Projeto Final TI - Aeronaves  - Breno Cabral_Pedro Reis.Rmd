@@ -1,0 +1,632 @@
+---
+title: 'Projeto Final TI: Ocorrências Aeronáuticas no Brasil'
+author: "Breno Cabral e Pedro Reis"
+date: "8 de maio de 2019"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+## Readme 
+A base de dados de ocorrências aeronáuticas está disponibilizada no Portal Brasileiro de Dados Abertos e contém informações sobre as Ocorrências Aeronáuticas da Aviação Civil Brasileira nos últimos 10 anos.
+
+Autores: Breno Cabral e Pedro Reis
+
+Os dados estão distribuídos em 4 (quatro) tabelas diferentes, que estão vinculadas por um mesmo código de ocorrência presente na primeira coluna. Os principais conteúdos disponíveis em cada uma delas está representado abaixo:
+
+- Tabela de ocorrências: Classificação, tipo de ocorrência, latitude, longitude, cidade, UF, dia, horário, número de aeronaves envolvidas.
+
+- Tabela de fatores contribuintes: nome, aspecto, condicionante, area, detalhe do fator contribuinte.
+
+- Tabela de aeronaves: Categoria do operador, tipo de aeronave, modelo, tipo do motor, quantidade de motores, fabricante, país fabricante, ano de fabricação, nível de dano e número de fatalidades.
+
+- Tabela de recomendações de segurança: Número de recomendação, datas, status da recomendação e destinatário.
+
+A partir dos dados presentes nas tabelas é possível realizar algumas análises como:
+
+- Os 5 Fabricantes responsáveis por aeronaves com maior número de acidentes;
+- Relação entre as ocorrências (acidente, incidente e incidente grave) com o ano da ocorrência;
+- Estado com maior número de ocorrências, quais operações estavam ocorrendo nos acidentes e comparar o número de acidentes de avião e helicóptero por ano;
+- Identificar os principais fatores que contribuíram para as ocorrências com fatalidade. 
+
+Fonte dos dados: http://dados.gov.br/dataset/ocorrencias-aeronauticas-da-aviacao-civil-brasileira
+
+Data da consulta: 30/01/2019
+
+##Projeto
+### 1. Coleta e preparação dos dados
+  Primeiramente, serão instalados e expostos todos os pacotes utilizados no desenvolvimento do projeto.
+```{r Packages, echo=TRUE, message=FALSE, warning=FALSE}
+# Instalando pacotes necessários
+if(!require(prettydoc)){
+    install.packages("prettydoc", dep = TRUE)
+    library(prettydoc)
+}
+if(!require(tidyverse)){
+  install.packages("tidyverse", dep = TRUE)
+  library(tidyverse)
+}
+if(!require(stringr)){
+  install.packages("stringr", dep = TRUE)
+  library(stringr)
+}
+if(!require(magrittr)){
+  install.packages("magrittr", dep = TRUE)
+  library(magrittr)
+}
+if(!require(rvest)){
+  install.packages("rvest", dep = TRUE)
+  library(rvest)
+}
+if(!require(mlbench)){
+    install.packages("mlbench", dep = TRUE)
+    library(mlbench)
+}
+if(!require(ggplot2)){
+    install.packages("ggplot2", dep = TRUE)
+    library(ggplot2)
+}
+
+# Pacotes envolvendo o desenvolvimento do mapa interativo
+
+if(!require(rgdal)){
+    install.packages("rgdal", dep = TRUE)
+    library(rgdal)
+}
+if(!require(RColorBrewer)){
+    install.packages("RColorBrewer", dep = TRUE)
+    library(RColorBrewer)
+}
+if(!require(leaflet)){
+    install.packages("leaflet", dep = TRUE)
+    library(leaflet)
+}
+if(!require(leaflet)){
+    install.packages("leaflet", dep = TRUE)
+    library(leaflet)
+}
+
+# Pacotes para o modelo de regressão
+
+if(!require(corrgram)){
+  install.packages("corrgram", dep = TRUE)
+  library(corrgram)
+}
+if(!require(broom)){
+  install.packages("broom", dep = TRUE)
+  library(broom)
+}
+if(!require(plotly)){
+  install.packages("plotly", dep = TRUE)
+  library(plotly)
+}
+if(!require(skimr)){
+  install.packages("skimr", dep = TRUE)
+  library(skimr)
+}
+if(!require(caTools)){
+  install.packages("caTools", dep = TRUE)
+  library(caTools)
+}
+
+
+```
+
+  Nesta etapa, cada url está nomeado com o nome da tabela correspondente a ele, conforme nomenclatura na descrição do projeto. Com excessão de "fatores contribuintes" que virou "contribuintes" e "recomendações de segurança" que virou "recomendacoes".
+
+```{r Fontes}
+# Criando variaveis com as fontes dos dados de cada tabela
+url_ocorrencias <- "https://raw.githubusercontent.com/fariasjlf/opendata_aig_brazil/master/data/oco.csv"
+url_aeronaves <- "https://raw.githubusercontent.com/fariasjlf/opendata_aig_brazil/master/data/anv.csv"
+url_contribuintes <- "https://raw.githubusercontent.com/fariasjlf/opendata_aig_brazil/master/data/ftc.csv"
+url_recomendacoes <- "https://raw.githubusercontent.com/fariasjlf/opendata_aig_brazil/master/data/rec.csv"
+```
+
+  Nesta etapa, os dataframes foram criados e os campos sem valores, que estavam representados por diversos símbolos, foram identificados para serem substituídos por "NA".
+
+```{r Dataframes}
+# Criando dataframes
+df_ocorrencias <- read_delim(url_ocorrencias, delim = "~", col_names = TRUE, na = c("","NULL","***","****","*****","###!","####"))
+df_aeronaves <- read_delim(url_aeronaves, delim = "~", col_names = TRUE, na = c("","NULL","***","****","*****","###!","####"))
+df_contribuintes <- read_delim(url_contribuintes, delim = "~", col_names = TRUE, na = c("","NULL","***","****","*****","###!","####"))
+df_recomendacoes <- read_delim(url_recomendacoes, delim = "~", col_names = TRUE, na = c("","NULL","***","****","*****","###!","####"))
+```
+
+### 2. Tratamento dos data frames
+
+   **Modificações nos data frames df_ocorrencias, df_aeronaves e df_contribuintes**
+-  Colunas que apresentam categorias e são passíveis de futuras análises foram transformadas em fatores;
+-  A coluna "codigo_ocorrencia" foi modificada para character pois ela é a coluna comum entre as tabelas e será utilizada para juntá-las mais a frente;
+-  Colunas que não foram identificadas como úteis para as análises futuras foram removidas;
+-  Os 3 dataframes serão utilizados no projeto.
+
+   **Modificações no data frame df_recomendacoes**
+-  Foi concluído que não será necessário a utilização do dataframe de recomendações para as análises que serão desenvolvidas no projeto.
+  
+```{r tratamento_df_ocorrencias}
+str(df_ocorrencias)
+tbl_df(df_ocorrencias)
+
+#Transformando algumas colunas para fatores
+df_ocorrencias$codigo_ocorrencia %<>% as.character()
+df_ocorrencias$ocorrencia_classificacao %<>%  as.factor()
+df_ocorrencias$ocorrencia_tipo %<>%  as.factor() 
+df_ocorrencias$ocorrencia_tipo_categoria %<>%  as.factor() 
+df_ocorrencias$ocorrencia_saida_pista %<>% as.factor()
+df_ocorrencias$ocorrencia_tipo_icao %<>% as.factor()
+df_ocorrencias$ocorrencia_cidade %<>% as.factor()
+df_ocorrencias$ocorrencia_uf %<>% as.factor()
+df_ocorrencias$ocorrencia_aerodromo %<>% as.factor()
+
+#Retirando colunas que a princípio não serão utilizadas
+df_ocorrencias$ocorrencia_dia_extracao <- NULL
+df_ocorrencias$ocorrencia_pais <- NULL #todas ocorrências são no Brasil
+df_ocorrencias$investigacao_aeronave_liberada <- NULL
+df_ocorrencias$investigacao_status <- NULL
+df_ocorrencias$divulgacao_relatorio_publicado <- NULL
+df_ocorrencias$divulgacao_dia_publicacao <- NULL
+df_ocorrencias$divulgacao_relatorio_numero <- NULL
+
+#Adicionar coluna ocorrencia_ano e transformar para fator
+
+df_ocorrencias %<>% tidyr::extract(ocorrencia_dia, into = "ocorrencia_ano", regex = "([0-9]{4})", remove = FALSE)
+
+```
+
+```{r tratamento_df_aeronaves}
+str(df_aeronaves)
+tbl_df(df_aeronaves)
+
+#Transformando algumas colunas para fatores
+df_aeronaves$codigo_ocorrencia %<>% as.character()
+df_aeronaves$aeronave_operador_categoria %<>% as.factor()
+df_aeronaves$aeronave_tipo_veiculo %<>% as.factor()
+df_aeronaves$aeronave_fabricante %<>% as.factor()
+df_aeronaves$aeronave_modelo %<>% as.factor()
+df_aeronaves$aeronave_tipo_icao %<>% as.factor()
+df_aeronaves$aeronave_motor_tipo %<>% as.factor()
+df_aeronaves$aeronave_motor_quantidade %<>% as.factor()
+df_aeronaves$aeronave_pmd %<>% as.numeric()
+df_aeronaves$aeronave_pmd_categoria %<>% as.factor()
+df_aeronaves$aeronave_registro_segmento %<>% as.factor()
+df_aeronaves$aeronave_tipo_operacao %<>% as.factor()
+df_aeronaves$aeronave_nivel_dano %<>% as.factor()
+df_aeronaves$aeronave_ano_fabricacao %<>% as.factor()
+df_aeronaves$aeronave_pais_fabricante %<>% as.factor()
+df_aeronaves$aeronave_fase_operacao %<>% as.factor()
+
+#Retirando colunas que a princípio não serão utilizadas
+df_aeronaves$aeronave_matricula <-  NULL
+df_aeronaves$aeronave_registro_categoria <- NULL
+df_aeronaves$aeronave_voo_origem <- NULL #excesso de NA
+df_aeronaves$aeronave_voo_destino <- NULL #excesso de NA
+df_aeronaves$aeronave_fase_operacao_icao <- NULL #excesso de NA
+df_aeronaves$aeronave_dia_extracao <- NULL
+
+```
+
+```{r tratamento_df_contribuintes}
+str(df_contribuintes)
+tbl_df(df_contribuintes)
+
+#Transformando algumas colunas para fatores 
+df_contribuintes$codigo_ocorrencia %<>% as.character()
+df_contribuintes$fator_nome %<>% as.factor()
+df_contribuintes$fator_aspecto %<>% as.factor()
+df_contribuintes$fator_condicionante %<>% as.factor()
+df_contribuintes$fator_area %<>% as.factor()
+
+#Retirando colunas que a princípio não serão utilizadas
+df_contribuintes$fator_dia_extracao <- NULL
+df_contribuintes$fator_detalhe_fator <- NULL
+
+str(df_contribuintes)
+```
+
+```{r tratamento_df_recomendacoes}
+#Ilustrando a estrutura
+str(df_recomendacoes)
+head(df_recomendacoes, n = 5)
+
+```
+
+### 3. Criando um único dataframe para o projeto
+
+  A partir das decisões tomadas na seção anterior, os dataframes df_ocorrencias, df_aeronaves e df_contribuintes, serão unificados em um só, para isso, utilizou-se a função merge duas vezes. A primeira para conectar df_ocorrencias e df_aeronaves, e a segunda para conectar df_aeronaves e df_contribuintes. Utilizando como base a coluna "codigo_ocorrencia" que está presente nos 3 data frames. Para não perder nenhum dado, foi considerada a tabela com maior quantidade de linhas, no primeiro código representado por "all.y = T" e no segundo por "all.x = T". Após o merge foi gerado um arquivo ".csv".
+  
+```{r criando_o_df_do_projeto}
+
+df_projeto <- merge(df_ocorrencias, df_aeronaves, by.x = "codigo_ocorrencia", by.y = "codigo_ocorrencia", all.y = T)
+
+df_projetofinal <- merge(df_projeto, df_contribuintes, by.x = "codigo_ocorrencia", by.y = "codigo_ocorrencia", all.x = T)
+
+str(df_projetofinal)
+view(df_projetofinal)
+
+# Para gerar o arquivo ".csv" basta tirar a "#" do código abaixo.  
+
+#write.csv(df_projetofinal, "df_projetofinal.csv")
+```
+
+### 4. Gerando análises a partir do data frame do projeto
+
+  Primeiramente, foi feita a contagem do número de ocorrências aéreas nos últimos 10 anos com o objetivo de identificar a amplitude de dados que serão analisados.
+  
+```{r Ocorrências}
+
+# Total de ocorrências aéreas nos últimos 10 anos em solo brasileiro:
+
+total_de_ocorrencias <- 
+  df_projetofinal %>% 
+  count(codigo_ocorrencia) %>% 
+  nrow()
+
+paste0("Nos últimos dez anos o total de ocorrencias aéreas é de ", total_de_ocorrencias,".")
+
+```
+
+  Uma vez identificado o número total de ocorrências, tentou-se entender como elas estão distribuidas pelo territorio brasileiro. Com esse fim, foi gerado um mapa interativo onde pode-se observar a quantidade de ocorrências em cada um dos estados do Brasil, bastando apenas passar o cursor do mouse no estado desejado. Além disso, o esquema de cores nos mostra, de acordo com a tonalidade, os estados com o maior número de ocorrências aéreas.
+
+```{r Mapa}
+# O if abaixo foi adicionado para não ser necessário baixar os arquivos novamente ao rodar o código mais de uma vez.
+
+if(!exists("shp")){
+  download.file("http://www.usp.br/nereus/wp-content/uploads/Brasil.zip",destfile="br_unidades_da_federacao.zip")
+  unzip("br_unidades_da_federacao.zip")
+  shp <- rgdal::readOGR(getwd(),"UFEBRASIL", stringsAsFactors=FALSE, encoding="UTF-8")
+  }
+
+dados_mapa <- df_projetofinal %>% 
+  tidyr::complete(ocorrencia_uf) %>% 
+  group_by(ocorrencia_uf) %>% 
+  summarize('Numero' = n(), na.rm = TRUE) %>% 
+  arrange(desc(Numero), ocorrencia_uf) %>% 
+  select(ocorrencia_uf, Numero)
+
+url <- "https://www.oobj.com.br/bc/article/quais-os-c%C3%B3digos-de-cada-uf-no-brasil-465.html"
+
+ID_UF <- url %>% 
+  read_html() %>% 
+  html_nodes("table") %>% 
+  html_table()
+
+dados_mapa <- merge(dados_mapa,ID_UF, by.x = "ocorrencia_uf", by.y = "UF")
+dados_mapa <- dados_mapa %>% 
+  select(Código.UF, ocorrencia_uf, Numero)
+
+mapa <- merge(shp,dados_mapa, by.x = "CD_GEOCODU", by.y = "Código.UF")
+
+# Criação do mapa
+
+bins <- c(0, 50, 100, 200, 500, 1000, 2000)
+pal <- colorBin("Greens", domain = mapa$Numero, bins = bins)
+
+labels <- sprintf(
+  "<strong>%s</strong><br/>%g ocorrências",
+  mapa$NM_ESTADO, mapa$Numero
+) %>% lapply(htmltools::HTML)
+
+leaflet(mapa) %>%
+  addTiles() %>% 
+  addPolygons(fillColor = ~pal(mapa$Numero),
+              weight = 0.5,
+              opacity = 1,
+              color = "gray",
+              dashArray = "3",
+              fillOpacity = 0.9,
+              highlight = highlightOptions(weight = 3,
+                                           color = "#666",
+                                           dashArray = "",
+                                           fillOpacity = 0.7,
+                                           bringToFront = TRUE),
+              label = labels,
+              labelOptions = labelOptions(style = list("font-weight" = "normal", padding = "3px 8px"),
+                                          textsize = "15px",
+                                          direction = "auto")) %>%
+  addLegend(pal = pal, values = ~mapa$Numero, opacity = 0.9, 
+            title = "Número de ocorrências", position = "bottomright")
+
+```
+
+  Como primeira análise gráfica foi feita a contagem das ocorrências por classificação. Abaixo estão listadas as classificações e suas respectivas definições de acordo com o Comando da Aeronáutica.
+  
+  **Classificações utilizadas na base:**
+  
+- Incidente: Uma ocorrência aeronáutica, não classificada como um acidente, associada à operação de uma aeronave, que afete ou possa afetar a segurança da operação;
+
+- Incidente Grave: Incidente aeronáutico envolvendo circunstâncias que indiquem que houve elevado risco de acidente relacionado à operação de uma aeronave;
+
+- Acidente: A diferença entre o incidente grave e o acidente está apenas nas consequências. Dado isso, uma ocorrência é considerada acidente quando uma pessoa sofre lesão grave ou venha a falecer, a aeronave tenha falha estrutural ou dano grave ou a aeronave seja considerada desaparecida ou esteja em local inacessível.
+
+  Como resultado, foi gerado o gráfico das ocorrências por tipo de classificação. Em síntense, constatou-se a predominância de incidentes, seguidos de acidentes e incidentes graves. 
+
+```{r Gráfico 1}
+
+# Contando as ocorrencias por classificação:
+
+ocorrencias_por_classificacao <- df_projetofinal %>% 
+  group_by(codigo_ocorrencia, ocorrencia_classificacao) %>% 
+  summarize(n())
+
+ocorrencias_por_classificacao %<>% 
+  group_by(ocorrencia_classificacao) %>% 
+  summarize('Numero' = n(), na.rm = TRUE)
+ocorrencias_por_classificacao
+
+# Gráfico de ocorrências por classificação
+
+barplot(ocorrencias_por_classificacao$Numero, 
+        main="Ocorrências por tipo de categoria", 
+        names.arg = ocorrencias_por_classificacao$ocorrencia_classificacao,
+        xlab = "Tipo de classificação",
+        ylab = "Quantidade",
+        ylim=c(0, 3500), 
+        col = "lightseagreen") 
+abline(h = 0, col = "black")
+
+```
+
+  A fim de realizar uma análise mais precisa, foram identificados quais eram os 10 estados brasileiros com o maior número de ocorrências. A partir do gráfico abaixo, observou-se que o estado de São Paulo destaca-se com o maior número.
+
+```{r Gráfico 2}
+# Quais são os 10 estados com o maior número de ocorrências?
+
+ocorrencias_por_estado <- df_projetofinal %>% 
+  complete(ocorrencia_uf) %>% 
+  group_by(ocorrencia_uf) %>% 
+  summarize('Numero' = n(), na.rm = TRUE) %>% 
+  arrange(desc(Numero), ocorrencia_uf) %>% 
+  select(ocorrencia_uf, Numero) %>% 
+  filter(Numero >= nth(Numero, 10))
+
+# Gráfico com os 10 Estados com o maior número de ocorrências
+
+barplot(ocorrencias_por_estado$Numero, 
+        main="Ocorrências por estado brasileiro", 
+        names.arg = ocorrencias_por_estado$ocorrencia_uf,
+        xlab = "Estados",
+        ylab = "Quantidade",
+        ylim=c(0, 2000), 
+        col = "lightseagreen") 
+abline(h = 0, col = "black")
+
+```
+
+  Após identificar o estado com maior número de ocorrências, resolveu-se explorar os acidentes nesse estado. Dessa forma, foi feito uma análise do tipo de operação realizada durante uma ocorrência classficada como acidente no estado de São Paulo.
+  O resultado nos mostrou que a maior proporção de acidentes ocorre durante voos privados, seguido de voos de intrução e operação agrícola. Em números, as proporções de tais operações está em torno de, respectivamente, 40%, 30% e 10% do total de acidentes em São Paulo.
+
+```{r Gráfico 3}
+# Para o estado com o maior número de ocorrências, qual era a operação realizada durante os acidentes?
+
+ocorrencias_em_sp <- df_projetofinal %>% 
+  filter(ocorrencia_uf == "SP") %>% 
+  filter(ocorrencia_classificacao == "ACIDENTE") %>% 
+  group_by(aeronave_tipo_operacao) %>% 
+  summarize('Numero' = n(), na.rm = TRUE) %>% 
+  mutate('Porcentagem' = (Numero/sum(Numero))*100) %>% 
+  select(aeronave_tipo_operacao, Porcentagem) %>% 
+  arrange(desc(Porcentagem), aeronave_tipo_operacao) 
+
+# Gráfico de acidentes por tipo de operação em São Paulo
+
+ocorrencias_em_sp %>% 
+  ggplot(aes(x = aeronave_tipo_operacao,
+             y = Porcentagem,
+             group = aeronave_tipo_operacao,
+             fill = aeronave_tipo_operacao)) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +
+  theme(axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())+
+  labs(title="Acidentes por tipo de operação em SP",
+        x ="Operação", y = "Proporção")
+
+```
+
+  Surgiu então a curiosidade de identificar a diferença entre os acidentes envolvendo aviões e helicópteros. No gráfico abaixo foi feita essa comparação dividido por ano.
+  Uma vez feito isso, identificou-se que nos anos de 2010 e 2011 os números de acidentes envolvendo aviçoes e helicópteros foram muito próximos. Porém, talvez o mais importante, é que foi possível identificar uma tendência decrescente no número de acidentes dos dois tipos de veículos desde 2009 até 2019.
+
+```{r Gráfico 4}
+# Qual número de acidentes por ano em São Paulo para aviões e helicópteros?
+
+acidentes_sp <- df_projetofinal %>% 
+  filter(ocorrencia_uf == "SP") %>% 
+  filter(ocorrencia_classificacao == "ACIDENTE") %>% 
+  filter(aeronave_tipo_veiculo == "AVIÃO" | aeronave_tipo_veiculo == "HELICÓPTERO") %>% 
+  group_by(aeronave_tipo_veiculo, ocorrencia_ano) %>%
+  summarize('Numero' =  n(), na.rm = TRUE) 
+
+# Gráfico comparativo de acidentes envolvendo aviões e helicópteros em São Paulo.
+acidentes_sp %>% 
+  ggplot(aes(x = ocorrencia_ano,
+             y = Numero,
+             group = aeronave_tipo_veiculo,
+             fill = aeronave_tipo_veiculo)) +
+  geom_col(position = "dodge") + 
+  scale_fill_manual(values = c("darkgreen", "cyan3")) +
+  labs(title="Acidentes de aviões e helicópteros em SP por ano",
+        x ="Ano", y = "Número de Acidentes")
+
+```
+
+  Uma vez analisado e identificado o contexto atual, buscou-se explorar quais eram as principais empresas responsáveis pela produção das aeronaves envolvidas em acidentes aéreos em todo o Brasil. No gráfico abaixo é explicitado o número de ocorrências e o nome das 5 principais empresas relacionadas. Ressalta-se o alto número de acidentes envolvendo aeronaves da Neiva Industria Aeronautica e da Cessna Aircraft. 
+
+```{r Gráfico 5}
+# Quais são os 5 Fabricantes responsáveis por aeronaves com maior número de acidentes?
+
+acidentes_por_fabricante <- df_projetofinal %>% 
+  group_by(aeronave_fabricante) %>% 
+  filter(ocorrencia_classificacao == "ACIDENTE") %>% 
+  summarize('Numero' = n(), na.rm = TRUE) %>% 
+  na.omit() %>% 
+  arrange(desc(Numero), aeronave_fabricante) %>% 
+  select(aeronave_fabricante, Numero) %>% 
+  filter(Numero >= nth(Numero, 5))
+
+# Gráfico com os 5 Fabricantes de aeronaves com o maior número de Acidentes
+
+acidentes_por_fabricante %>% 
+  ggplot(aes(x = aeronave_fabricante,
+             y = Numero,
+             group = aeronave_fabricante,
+             fill = aeronave_fabricante)) +
+  geom_col() + 
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())  +
+  scale_fill_manual(values = c("navy", "firebrick3", "orange3", "yellowgreen", "cyan3"))+
+  labs(title="Acidentes por Fabricantes",
+        x ="Fabricante", y = "Número de Acidentes")
+```
+
+  No Gráfico 4, que expõe os acidentes por ano em São Paulo para aviões e helicópteros foi identificado a diminuição do número de acidentes com o decorrer dos anos. Isto posto, foi feita a análise de como estão se comportando o número de ocorrências de qualquer tipo desde 2009 até 2019.
+  
+  Dado isso, foi identificado pelo gráfico abaixo que o número de ocorrências (acidentes, incidentes e incidentes graves) estão decrescendo ao longo dos anos.
+  **Observação:** Durante o desenvolvimento do projeto, o ano de 2019 ainda estava em andamento. Dessa forma, o gráfico nos mostra uma posição apenas para o primeiro semestre do ano de 2019.
+
+```{r Gráfico 6}
+# Ocorrências (acidente, incidente e incidente grave) por ano 
+
+ocorrencias_por_ano <- df_projetofinal %>% 
+  select(ocorrencia_classificacao, ocorrencia_ano) %>% 
+  group_by(ocorrencia_classificacao, ocorrencia_ano) %>% 
+  summarise('Numero'= n(), na.rm = T) %>% 
+  select(ocorrencia_classificacao, ocorrencia_ano, Numero)
+
+# Gráfico Ocorrencias por ano
+
+ocorrencias_por_ano  %>%  
+  ggplot(aes(x = ocorrencia_ano ,
+             y = Numero,
+             group = ocorrencia_classificacao,
+             color = ocorrencia_classificacao,
+             shape = ocorrencia_classificacao)) +
+  geom_line() + 
+  scale_shape_manual(values = c(19, 17, 3)) +
+  scale_color_manual(values = c("black", "blue", "cyan3")) +
+  labs(title="Ocorrências por ano",
+        x ="ano", y = "Número de Ocorrências")
+```
+ 
+  Quando são abordados temas sobre ocorrências aéras, um dos assuntos mais sensiveis é o número de fatalidades. Abaixo, foi identificado os principais fatores que contribuíram para as ocorrências com fatalidade segundo a base de dados estudada.
+  
+  Em suma, identificou-se:
+  
+- O aspecto psicológico e o desempenho do ser humano são os dois fatores principais nas ocorrências aéreas com fatalidades;
+- Há ocorrências relacionadas a problemas ergonômicos nas aeronaves, dado importante para o projeto de novas aeronaves. 
+ 
+```{r Gráfico 7}
+
+ocorrencias_fator <- df_projetofinal %>% 
+  group_by(ocorrencia_classificacao, fator_aspecto) %>% 
+  filter(total_fatalidades >= 1)  %>% 
+  summarise('Numero'= n(), na.rm = T) %>% 
+  na.omit() %>% 
+  arrange(desc(Numero), fator_aspecto)
+
+#Gráfico
+
+ocorrencias_fator %>% 
+  ggplot(aes(x = fator_aspecto,
+             y = Numero,
+             group = fator_aspecto,
+             fill = fator_aspecto)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title="Fatores para as ocorrências com fatalidade",
+        x ="Fator", y = "Número") + 
+  theme(legend.position = "none")
+```
+
+
+### 5. Previsões 
+
+  Nesta etapa do projeto foi criado um modelo de regressão de acordo com as variáveis disponíveis no banco de dados. Uma vez que a maior parte dos dados presentes estão em formas de variaveis categóricas, ou seja, vetores definidos como fatores no inicio do projeto, foi adotado o modelo de regressão logistica, mais adequado para tratar tais tipos de dados.
+  Dado que foi constatado nas análises anteriores que a maioria das ocorrências estão concentradas no estado de São Paulo, utilizou-se tal estado para construir o modelo de regressão abaixo. O modelo proposto tem como objetivo calcular a probabilidade de haver fatalidades ou não durante um acidente no estado de São Paulo, de acordo com um conjunto de variaveis correlacionadas.
+
+```{r Regressão logística}
+
+# Selecionando os acidentes em São Paulo
+
+df_projetosp <- df_projetofinal %>% 
+  filter(ocorrencia_classificacao == "ACIDENTE")%>% 
+  filter(ocorrencia_uf == "SP")
+  
+# Agregando valores binários para identificar se houve uma ou mais fatalidade ou não
+
+df_projetosp$fatalidade_bin[df_projetosp$total_fatalidades > 0] <- 1
+df_projetosp$fatalidade_bin[df_projetosp$total_fatalidades == 0] <- 0 
+str(df_projetosp)
+
+# Correlações
+
+corrgram(df_projetosp , order = TRUE,
+         lower.panel = panel.cor,
+         upper.panel = panel.pts)
+
+# Modelo
+
+lprojeto <- glm(fatalidade_bin ~ aeronave_nivel_dano + total_recomendacoes + aeronave_tipo_operacao + ocorrencia_tipo_categoria,
+               family = binomial(link = "logit"),
+               data = df_projetosp)
+summary(lprojeto)
+
+
+plot(predict(lprojeto, type = "response"), residuals(lprojeto, type = "deviance"))
+
+
+
+
+
+```
+  A partir dos gráficos, observa-se uma maior concentração entre valores de 0 e 1. Uma vez que foram atendidas as premissas da regressão logística, considera-se que o modelo é adequado, acertando em sua maior parte quando ocorre uma fatalidade e quando não ocorre.
+
+```{r Regressão logística pt.2}
+exp(coef(lprojeto))     # Exponenciação dos coeficientes para melhor interpretação
+                       
+exp(lprojeto$coefficients)
+
+df_projetosp$Prob <- predict(lprojeto,
+                      newdata = df_projetosp,
+                      type = "response")
+
+plot(x = df_projetosp$Prob, y = df_projetosp$fatalidade_bin)
+```
+
+  Para verificar a validade e adequação do modelo foram realizados os testes abaixo. 
+  O resultado dos testes mostrou que o modelo proposto tornou-se mais adequado principalmente ao acrescentar as variáveis "ocorrencia_tipo_categoria" e "aeronave_nivel_dano", posssível de se observar por meio da função anova. Com a inclusão das duas variaveis o valor do desvio residual diminuiu consideravelmente em comparação ao modelo NULL.
+
+```{r Testes}
+
+# Teste global do modelo
+
+lnull <- glm(fatalidade_bin ~ 1,
+             family = binomial(link = "logit"),
+             data = df_projetosp)  
+
+anova(lnull, lprojeto, test = "Chisq")  
+
+# Teste dos coeficientes
+
+anova(lprojeto, test = "Chisq")
+
+```
+  
+  Foi realizada a comparação entre dois modelos. O primeiro modelo é o apresentado anteriormente, enquanto no segundo foram retiradas as variaveis que possuiam a maior correlação, conforme analisado pelo desvio residual.
+  A comparação nos mostra uma queda significante no valor do AIC, o que significa que o modelo está perdendo menos infomações ao ser utilizado na previsão. Em outras palavras, o modelo "lprojeto" é mais acertivo que o modelo "lprojeto2".
+  
+```{r Comparação de modelos}
+lprojeto2 <- glm(fatalidade_bin ~ total_recomendacoes + aeronave_tipo_operacao,
+               family = binomial(link = "logit"),
+               data = df_projetosp)
+summary(lprojeto2)
+
+anova(lprojeto2, lprojeto, test = "Chisq")  ## Comparação dos modelos
+
+AIC(lprojeto2,lprojeto)         ## Akaike Information Criterion (AIC)
+
+```
+
+
